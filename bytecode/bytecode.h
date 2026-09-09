@@ -22,6 +22,7 @@ public:
 	struct {
 		uint8_t version = 0;
 		uint8_t flags = 0;
+		bool isKL82 = false;
 		std::string chunkname;
 	} header;
 
