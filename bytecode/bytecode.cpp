@@ -36,9 +36,11 @@ void Bytecode::read_header() {
 		+ byte_to_string(fileBuffer[0]) + " " + byte_to_string(fileBuffer[1]) + " "
 		+ byte_to_string(fileBuffer[2]) + " " + byte_to_string(fileBuffer[3])
 		+ "\n\nFile does not contain supported LuaJIT bytecode", filePath, DEBUG_INFO);
-	header.version = header.isKL82 ? BC_VERSION_2 : fileBuffer[3];
-	assert(header.version == BC_VERSION_1 || header.version == BC_VERSION_2, "Invalid bytecode version (" + byte_to_string(fileBuffer[3]) + ")", filePath, DEBUG_INFO);
 	header.flags = fileBuffer[4];
+	header.version = header.isKL82
+		? (header.flags & BC_F_FR2 ? BC_VERSION_2 : BC_VERSION_1)
+		: fileBuffer[3];
+	assert(header.version == BC_VERSION_1 || header.version == BC_VERSION_2, "Invalid bytecode version (" + byte_to_string(fileBuffer[3]) + ")", filePath, DEBUG_INFO);
 	assert(!(header.flags & ~(BC_F_BE | BC_F_STRIP | BC_F_FFI | (header.version == BC_VERSION_2 ? BC_F_FR2 : 0))), "Invalid flags (" + byte_to_string(header.flags) + ")", filePath, DEBUG_INFO);
 	assert(!(header.flags & BC_F_BE), "Big endian support not implemented", filePath, DEBUG_INFO); //TODO
 	if (header.flags & BC_F_STRIP) return;

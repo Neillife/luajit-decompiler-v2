@@ -109,6 +109,35 @@ struct Bytecode::Instruction {
 	uint16_t d = 0;
 };
 
+// Historical KL82 dumps without FR2 use KOG's 93-opcode LuaJIT 2.0 order.
+static constexpr BC_OP KL82_V1_OPS[] = {
+	BC_OP_ISLT, BC_OP_ISGE, BC_OP_ISLE, BC_OP_ISGT,
+	BC_OP_ISEQV, BC_OP_ISNEV, BC_OP_ISEQS, BC_OP_ISNES,
+	BC_OP_ISEQN, BC_OP_ISNEN, BC_OP_ISEQP, BC_OP_ISNEP,
+	BC_OP_MOV, BC_OP_NOT, BC_OP_UNM, BC_OP_LEN,
+	BC_OP_ISTC, BC_OP_ISFC, BC_OP_IST, BC_OP_ISF,
+	BC_OP_KSTR, BC_OP_KCDATA, BC_OP_KSHORT, BC_OP_KNUM, BC_OP_KPRI, BC_OP_KNIL,
+	BC_OP_ADDVN, BC_OP_SUBVN, BC_OP_MULVN, BC_OP_DIVVN, BC_OP_MODVN,
+	BC_OP_ADDNV, BC_OP_SUBNV, BC_OP_MULNV, BC_OP_DIVNV, BC_OP_MODNV,
+	BC_OP_ADDVV, BC_OP_SUBVV, BC_OP_MULVV, BC_OP_DIVVV, BC_OP_MODVV,
+	BC_OP_POW, BC_OP_CAT,
+	BC_OP_CALLM, BC_OP_CALL, BC_OP_CALLMT, BC_OP_CALLT,
+	BC_OP_UGET, BC_OP_USETV, BC_OP_USETS, BC_OP_USETN, BC_OP_USETP,
+	BC_OP_ITERC, BC_OP_ITERN, BC_OP_VARG, BC_OP_ISNEXT,
+	BC_OP_UCLO, BC_OP_FNEW, BC_OP_TNEW, BC_OP_TDUP, BC_OP_GGET, BC_OP_GSET,
+	BC_OP_TGETV, BC_OP_TGETS, BC_OP_TGETB,
+	BC_OP_TSETV, BC_OP_TSETS, BC_OP_TSETB, BC_OP_TSETM,
+	BC_OP_RETM, BC_OP_RET, BC_OP_RET0, BC_OP_RET1,
+	BC_OP_FORI, BC_OP_JFORI, BC_OP_FORL, BC_OP_IFORL, BC_OP_JFORL,
+	BC_OP_ITERL, BC_OP_IITERL, BC_OP_JITERL,
+	BC_OP_LOOP, BC_OP_ILOOP, BC_OP_JLOOP, BC_OP_JMP,
+	BC_OP_FUNCF, BC_OP_IFUNCF, BC_OP_JFUNCF,
+	BC_OP_FUNCV, BC_OP_IFUNCV, BC_OP_JFUNCV, BC_OP_FUNCC, BC_OP_FUNCCW
+};
+
+static_assert(sizeof(KL82_V1_OPS) / sizeof(KL82_V1_OPS[0]) == 93,
+	"Legacy KL82 must map every LuaJIT 2.0 opcode exactly once");
+
 // Serialized KL82 opcode index -> the decompiler's canonical LuaJIT 2.1 enum.
 // Operand bytes are unchanged by the proprietary format.
 static constexpr BC_OP KL82_OPS[] = {
@@ -141,6 +170,9 @@ static_assert(sizeof(KL82_OPS) / sizeof(KL82_OPS[0]) == BC_OP_INVALID,
 
 static BC_OP get_op_type(const uint8_t& byte, const uint8_t& version, const bool& isKL82) {
 	if (isKL82) {
+		if (version == Bytecode::BC_VERSION_1) {
+			return byte < sizeof(KL82_V1_OPS) / sizeof(KL82_V1_OPS[0]) ? KL82_V1_OPS[byte] : BC_OP_INVALID;
+		}
 		return byte < sizeof(KL82_OPS) / sizeof(KL82_OPS[0]) ? KL82_OPS[byte] : BC_OP_INVALID;
 	}
 	return (BC_OP)(version == Bytecode::BC_VERSION_1 && byte >= BC_OP_ISTYPE ? (byte >= BC_OP_TGETR - 2 ? (byte >= BC_OP_TSETR - 3 ? byte + 4 : byte + 3) : byte + 2) : byte);

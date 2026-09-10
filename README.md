@@ -5,8 +5,10 @@ The project fixes all of the bugs and quirks the python decompiler had while als
 full support for gotos and stripped bytecode including locals and upvalues.
 
 This repository variant also accepts KL82 bytecode (`1B 4B 4C 82`).
-KL82 opcodes are normalized while they are read; ordinary LuaJIT `LJ01` and
-`LJ02` inputs continue to use the original parsing path.
+KL82 dumps with `FR2` use the current 97-opcode table. Historical KL82 dumps
+without `FR2` use the LuaJIT 2.0 93-opcode table. Opcodes are normalized while
+they are read; ordinary LuaJIT `LJ01` and `LJ02` inputs continue to use the
+original parsing path.
 
 ## Usage
 
