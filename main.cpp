@@ -11,6 +11,7 @@ struct Error {
 static const HANDLE CONSOLE_OUTPUT = GetStdHandle(STD_OUTPUT_HANDLE);
 //static const HANDLE CONSOLE_INPUT = GetStdHandle(STD_INPUT_HANDLE);
 static bool isCommandLine;
+static bool isWorkerMode = false;
 static bool isProgressBarActive = false;
 static uint32_t filesSkipped = 0;
 
@@ -21,6 +22,7 @@ static struct {
 	bool ignoreDebugInfo = false;
 	bool minimizeDiffs = false;
 	bool unrestrictedAscii = false;
+	bool worker = false;
 	std::string inputPath;
 	std::string outputPath;
 	std::string extensionFilter;
@@ -171,6 +173,9 @@ static char* parse_arguments(const int& argc, char** const& argv) {
 				} else if (argument == "unrestricted_ascii") {
 					arguments.unrestrictedAscii = true;
 					continue;
+				} else if (argument == "worker") {
+					arguments.worker = true;
+					continue;
 				}
 			} else if (argument.size() == 2) {
 				switch (argument[1]) {
@@ -222,6 +227,131 @@ static void wait_for_exit() {
 	};
 }
 
+enum WorkerResponseStatus : uint32_t {
+	WORKER_SUCCESS = 0,
+	WORKER_INVALID_BYTECODE = 1,
+	WORKER_INTERNAL_ERROR = 2,
+};
+
+static constexpr uint32_t MAX_WORKER_REQUEST_SIZE = 256 * 1024 * 1024;
+
+static bool read_worker_bytes(HANDLE input, void* buffer, const uint32_t size, const bool allowCleanEof, bool& cleanEof) {
+	cleanEof = false;
+	uint32_t offset = 0;
+	while (offset < size) {
+		DWORD bytesRead = 0;
+		if (!ReadFile(input, static_cast<uint8_t*>(buffer) + offset, size - offset, &bytesRead, NULL)) {
+			cleanEof = GetLastError() == ERROR_BROKEN_PIPE && allowCleanEof && !offset;
+			return false;
+		}
+		if (!bytesRead) {
+			cleanEof = allowCleanEof && !offset;
+			return false;
+		}
+		offset += bytesRead;
+	}
+	return true;
+}
+
+static bool write_worker_bytes(HANDLE output, const void* buffer, const uint32_t size) {
+	uint32_t offset = 0;
+	while (offset < size) {
+		DWORD bytesWritten = 0;
+		if (!WriteFile(output, static_cast<const uint8_t*>(buffer) + offset, size - offset, &bytesWritten, NULL) || !bytesWritten) return false;
+		offset += bytesWritten;
+	}
+	return true;
+}
+
+static void write_worker_diagnostic(const std::string& message) {
+	const HANDLE errorOutput = GetStdHandle(STD_ERROR_HANDLE);
+	write_worker_bytes(errorOutput, message.data(), static_cast<uint32_t>(message.size()));
+	static constexpr char NEW_LINE = '\n';
+	write_worker_bytes(errorOutput, &NEW_LINE, 1);
+}
+
+static uint32_t decode_worker_uint32(const uint8_t* bytes) {
+	return bytes[0]
+		| static_cast<uint32_t>(bytes[1]) << 8
+		| static_cast<uint32_t>(bytes[2]) << 16
+		| static_cast<uint32_t>(bytes[3]) << 24;
+}
+
+static void encode_worker_uint32(const uint32_t value, uint8_t* bytes) {
+	bytes[0] = value & 0xFF;
+	bytes[1] = value >> 8 & 0xFF;
+	bytes[2] = value >> 16 & 0xFF;
+	bytes[3] = value >> 24;
+}
+
+static bool write_worker_response(const WorkerResponseStatus status, const std::string& payload = {}) {
+	if (payload.size() > UINT32_MAX) return false;
+	uint8_t header[8];
+	encode_worker_uint32(status, header);
+	encode_worker_uint32(static_cast<uint32_t>(payload.size()), header + 4);
+	const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+	return write_worker_bytes(output, header, sizeof(header))
+		&& write_worker_bytes(output, payload.data(), static_cast<uint32_t>(payload.size()));
+}
+
+static std::string normalize_worker_source(const std::string& source) {
+	std::string normalized;
+	normalized.reserve(source.size());
+	for (size_t i = 0; i < source.size(); i++) {
+		if (source[i] == '\r' && i + 1 < source.size() && source[i + 1] == '\n') continue;
+		normalized += source[i];
+	}
+	return normalized;
+}
+
+static int run_worker() {
+	const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+
+	while (true) {
+		uint8_t requestHeader[4];
+		bool cleanEof = false;
+		if (!read_worker_bytes(input, requestHeader, sizeof(requestHeader), true, cleanEof)) {
+			if (cleanEof) return EXIT_SUCCESS;
+			write_worker_diagnostic("Worker request header is truncated or unreadable.");
+			return EXIT_FAILURE;
+		}
+		const uint32_t requestSize = decode_worker_uint32(requestHeader);
+		if (requestSize > MAX_WORKER_REQUEST_SIZE) {
+			write_worker_diagnostic("Worker request exceeds the 256 MiB protocol limit.");
+			return EXIT_FAILURE;
+		}
+
+		std::vector<uint8_t> request;
+		try {
+			request.resize(requestSize);
+		} catch (...) {
+			write_worker_diagnostic("Worker could not allocate the declared request body.");
+			return EXIT_FAILURE;
+		}
+		if (requestSize && !read_worker_bytes(input, request.data(), requestSize, false, cleanEof)) {
+			write_worker_diagnostic("Worker request body is truncated or unreadable.");
+			return EXIT_FAILURE;
+		}
+
+		try {
+			Bytecode bytecode("<worker-request>", std::move(request));
+			Ast ast(bytecode, arguments.ignoreDebugInfo, arguments.minimizeDiffs);
+			Lua lua(bytecode, ast, arguments.minimizeDiffs, arguments.unrestrictedAscii);
+			bytecode();
+			ast();
+			lua();
+			const std::string source = normalize_worker_source(lua.source());
+			if (!write_worker_response(WORKER_SUCCESS, source)) return EXIT_FAILURE;
+		} catch (const Error& error) {
+			write_worker_diagnostic("Worker rejected bytecode: " + error.message);
+			if (!write_worker_response(WORKER_INVALID_BYTECODE)) return EXIT_FAILURE;
+		} catch (...) {
+			write_worker_diagnostic("Worker failed with an internal error.");
+			if (!write_worker_response(WORKER_INTERNAL_ERROR)) return EXIT_FAILURE;
+		}
+	}
+}
+
 int main(int argc, char* argv[]) {
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 
@@ -237,12 +367,16 @@ int main(int argc, char* argv[]) {
 #endif
 	}
 
-	print(std::string(PROGRAM_NAME) + "\nCompiled on " + __DATE__);
-	
-	if (parse_arguments(argc, argv)) {
-		print("Invalid argument: " + std::string(parse_arguments(argc, argv)) + "\nUse -? to show usage and options.");
+	char* invalidArgument = parse_arguments(argc, argv);
+	if (invalidArgument) {
+		print("Invalid argument: " + std::string(invalidArgument) + "\nUse -? to show usage and options.");
 		return EXIT_FAILURE;
 	}
+
+	isWorkerMode = arguments.worker;
+	if (isWorkerMode) return run_worker();
+
+	print(std::string(PROGRAM_NAME) + "\nCompiled on " + __DATE__);
 	
 	if (arguments.showHelp) {
 		print(
@@ -258,6 +392,7 @@ int main(int argc, char* argv[]) {
 			"  -i, --ignore_debug_info\tIgnore bytecode debug info\n"
 			"  -m, --minimize_diffs\t\tOptimize output formatting to help minimize diffs\n"
 			"  -u, --unrestricted_ascii\tDisable default UTF-8 encoding and string restrictions"
+			"\n  --worker\t\t\tRead and write framed requests through standard streams"
 		);
 		return EXIT_SUCCESS;
 	}
@@ -387,6 +522,7 @@ std::string input() {
 */
 
 void print_progress_bar(const double& progress, const double& total) {
+	if (isWorkerMode) return;
 	static char PROGRESS_BAR[] = "\r[====================]";
 
 	const uint8_t threshold = std::round(20 / total * progress);
@@ -402,7 +538,7 @@ void print_progress_bar(const double& progress, const double& total) {
 void erase_progress_bar() {
 	static constexpr char PROGRESS_BAR_ERASER[] = "\r                      \r";
 
-	if (!isProgressBarActive) return;
+	if (isWorkerMode || !isProgressBarActive) return;
 	WriteConsoleA(CONSOLE_OUTPUT, PROGRESS_BAR_ERASER, sizeof(PROGRESS_BAR_ERASER) - 1, NULL, NULL);
 	isProgressBarActive = false;
 }

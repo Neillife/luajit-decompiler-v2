@@ -2,6 +2,9 @@
 
 Bytecode::Bytecode(const std::string& filePath) : filePath(filePath) {}
 
+Bytecode::Bytecode(const std::string& sourceName, std::vector<uint8_t> sourceBytes)
+	: filePath(sourceName), isMemoryInput(true), memoryBuffer(std::move(sourceBytes)) {}
+
 Bytecode::~Bytecode() {
 	close_file();
 
@@ -69,6 +72,14 @@ void Bytecode::read_prototypes() {
 }
 
 void Bytecode::open_file() {
+	if (isMemoryInput) {
+		fileSize = memoryBuffer.size();
+		bytesUnread = fileSize;
+		memoryOffset = 0;
+		assert(fileSize >= MIN_FILE_SIZE, "File is too small or empty", filePath, DEBUG_INFO);
+		return;
+	}
+
 	file = CreateFileA(filePath.c_str(), GENERIC_READ, NULL, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 	assert(file != INVALID_HANDLE_VALUE, "Unable to open file", filePath, DEBUG_INFO);
 	fileSize |= (uint64_t)GetFileSize(file, (DWORD*)&fileSize) << 32;
@@ -85,6 +96,13 @@ void Bytecode::close_file() {
 
 void Bytecode::read_file(const uint32_t& byteCount) {
 	assert(bytesUnread >= byteCount, "Read would exceed end of file", filePath, DEBUG_INFO);
+	if (isMemoryInput) {
+		fileBuffer.assign(memoryBuffer.begin() + memoryOffset, memoryBuffer.begin() + memoryOffset + byteCount);
+		memoryOffset += byteCount;
+		bytesUnread -= byteCount;
+		return;
+	}
+
 	fileBuffer.resize(byteCount);
 	DWORD bytesRead = 0;
 	assert(ReadFile(file, fileBuffer.data(), byteCount, &bytesRead, NULL) && !(byteCount - bytesRead), "Failed to read file", filePath, DEBUG_INFO);

@@ -2,9 +2,11 @@ class Lua {
 public:
 
 	Lua(const Bytecode& bytecode, const Ast& ast, const std::string& filePath, const bool& forceOverwrite, const bool& minimizeDiffs, const bool& unrestrictedAscii);
+	Lua(const Bytecode& bytecode, const Ast& ast, const bool& minimizeDiffs, const bool& unrestrictedAscii);
 	~Lua();
 
 	void operator()();
+	const std::string& source() const;
 
 	const std::string filePath;
 
@@ -38,6 +40,8 @@ private:
 	const bool forceOverwrite;
 	const bool minimizeDiffs;
 	const bool unrestrictedAscii;
+	const bool writeToFile;
+	const bool writeBom;
 	HANDLE file = INVALID_HANDLE_VALUE;
 	std::string writeBuffer;
 	uint32_t indentLevel = 0;

@@ -13,6 +13,7 @@ public:
 	#include "instructions.h"
 
 	Bytecode(const std::string& filePath);
+	Bytecode(const std::string& sourceName, std::vector<uint8_t> sourceBytes);
 	~Bytecode();
 
 	void operator()();
@@ -43,8 +44,11 @@ private:
 	bool buffer_next_block();
 
 	HANDLE file = INVALID_HANDLE_VALUE;
+	bool isMemoryInput = false;
 	uint64_t fileSize = 0;
 	uint64_t bytesUnread = 0;
+	uint64_t memoryOffset = 0;
+	std::vector<uint8_t> memoryBuffer;
 	std::vector<uint8_t> fileBuffer;
 	std::vector<Prototype*> prototypes;
 };
